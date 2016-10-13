@@ -1,7 +1,12 @@
 #!/usr/bin/env groovy
+@Grab("org.tap4j:tap4j:4.2.0")
 import groovy.io.FileType
 import groovy.transform.Field
 import org.apache.commons.cli.Option
+import org.tap4j.model.*
+import org.tap4j.producer.TapProducer
+import org.tap4j.producer.TapProducerFactory
+import org.tap4j.util.StatusValues
 
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -118,7 +123,13 @@ if (exitValue != 0) fail("IDEA process returned with an unexpected return code o
 //
 // --- Now lets look on the results
 //
-exitValue = analyzeResult(resultPath, acceptedLeves, skipResults, skipIssueFilesRegex)
+if (cliOpts.tap) {
+  exitValue = analyzeResultTap(resultPath, acceptedLeves, skipResults, skipIssueFilesRegex)
+}
+else {
+  exitValue = analyzeResult(resultPath, acceptedLeves, skipResults, skipIssueFilesRegex)
+}
+
 if (exitValue != 0) fail("Found inspection results.")
 
 //
@@ -187,6 +198,8 @@ private OptionAccessor parseCli(List<String> configArgs) {
       'Enable verbose logging'
     n argName: 'dry-run', longOpt: 'dry-run', args: 0,
       'Dry-run: Do not start IDEA, but run parsing'
+    tap argName: 'tap', longOpt: 'tap', args: 0,
+      'Produce TAP test output'
     //to argName: 'minutes', longOpt: 'timeout', args: 1,
     //  'Timeout in Minutes to wait for IDEA to complete the inspection. Default:'
   }
@@ -313,7 +326,7 @@ private File findIdeaProperties(OptionAccessor cliOpts) {
 private analyzeResult(File resultPath, List<String> acceptedLeves,
                       List skipResults, List skipIssueFilesRegex) {
 
-  printAnalysisHeader(resultPath, acceptedLeves, skipResults, skipIssueFilesRegex)
+  println getAnalysisHeader(resultPath, acceptedLeves, skipResults, skipIssueFilesRegex)
 
   def allGood = true;
 
@@ -350,26 +363,94 @@ private analyzeResult(File resultPath, List<String> acceptedLeves,
     }
   }
 
-  printAnalysisFooterAndExit(allGood)
+  println getAnalysisFooterAndExit(allGood)
   return allGood ? 0 : 1
 }
 
-private void printAnalysisHeader(File resultPath, List<String> acceptedLeves, List skipResults, List skipIssueFilesRegex) {
-  println "\n#"
-  println "# Inspecting produced result files in $resultPath"
-  println "#"
-  println "# Looking for levels    : $acceptedLeves"
-  println "# Ignoring result files : $skipResults"
-  println "# Ignoring source files : $skipIssueFilesRegex"
+private analyzeResultTap(File resultPath, List<String> acceptedLeves,
+                      List skipResults, List skipIssueFilesRegex) {
+
+  TapProducer tapProducer = TapProducerFactory.makeTap13Producer();
+  TestSet testSet = new TestSet();
+
+  Header header = new Header(13);
+  header.comment = new Comment(getAnalysisHeader(resultPath, acceptedLeves, skipResults, skipIssueFilesRegex))
+  testSet.header = header;
+
+  def allGood = true;
+  def testNumber = 1;
+
+  resultPath.eachFile(FileType.FILES) { file ->
+
+    String fileContents = workaroundUnclosedProblemXmlTags(file.getText('UTF-8'))
+
+    def xmlDocument = new XmlParser().parseText(fileContents)
+    def fileIssues = []
+    def xmlFileName = file.name
+
+    if (skipResults.contains(xmlFileName.replace(".xml", ""))) {
+      println "--- Skipping $xmlFileName"
+      return
+    }
+
+    xmlDocument.problem.each { problem ->
+      String severity = problem.problem_class.@severity
+      String affectedFile = problem.file.text()
+      boolean fileShouldBeIgnored = false
+      skipIssueFilesRegex.each { String regex -> fileShouldBeIgnored = (fileShouldBeIgnored || affectedFile.matches(regex)) }
+      if (acceptedLeves.contains(severity) && !fileShouldBeIgnored) {
+        String problemDesc = problem.description.text()
+        String line = problem.line.text()
+        fileIssues << "$severity $affectedFile:$line -- $problemDesc";
+      }
+    }
+
+    if (!fileIssues.empty) {
+      allGood = false;
+      println("--- $xmlFileName")
+      println(fileIssues.join("\n"))
+      println("")
+
+      fileIssues.each { issue ->
+        TestResult result = new TestResult(StatusValues.NOT_OK, testNumber)
+        result.description = "$issue -- $xmlFileName"
+        testNumber++
+        testSet.addTestResult(result)
+      }
+    }
+  }
+
+  Plan plan = new Plan(testNumber);
+  testSet.plan = plan;
+
+  testSet.footer = new Footer(getAnalysisFooterAndExit(allGood))
+
+  File output = new File("${resultPath.absolutePath}/result.tap")
+  output << tapProducer.dump(testSet)
+
+  return allGood ? 0 : 1
 }
 
-private void printAnalysisFooterAndExit(boolean allGood) {
-  println "\n#"
-  println "# Analysis Result"
-  println "#"
+private String getAnalysisHeader(File resultPath, List<String> acceptedLeves, List skipResults, List skipIssueFilesRegex) {
+  return """\n#
+# Inspecting produced result files in $resultPath
+#
+# Looking for levels    : $acceptedLeves
+# Ignoring result files : $skipResults
+# Ignoring source files : $skipIssueFilesRegex """
+}
 
-  println allGood ? "Looks great - everything seems to be ok!"
-                  : "Entries found. Returncode: 1"
+private String getAnalysisFooterAndExit(boolean allGood) {
+  String footer = "\n#\n# Analysis Result\n#"
+
+  if (allGood) {
+    footer += "Looks great - everything seems to be ok!"
+  }
+  else {
+    footer += "Entries found. Returncode: 1"
+  }
+
+  return footer
 }
 
 /**
