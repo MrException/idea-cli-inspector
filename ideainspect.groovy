@@ -332,16 +332,21 @@ private analyzeResult(File resultPath, List<String> acceptedLeves,
 
   resultPath.eachFile(FileType.FILES) { file ->
 
-    String fileContents = workaroundUnclosedProblemXmlTags(file.getText('UTF-8'))
-
-    def xmlDocument = new XmlParser().parseText(fileContents)
-    def fileIssues = []
     def xmlFileName = file.name
+
+    if (file.length() > 2 * 1024 * 1024) {
+      println "--- Skipping $xmlFileName it's to large (> 2MB)"
+      return
+    }
 
     if (skipResults.contains(xmlFileName.replace(".xml", ""))) {
       println "--- Skipping $xmlFileName"
       return
     }
+    String fileContents = workaroundUnclosedProblemXmlTags(file.getText('UTF-8'))
+
+    def xmlDocument = new XmlParser().parseText(fileContents)
+    def fileIssues = []
 
     xmlDocument.problem.each { problem ->
       String severity = problem.problem_class.@severity
@@ -382,16 +387,22 @@ private analyzeResultTap(File resultPath, List<String> acceptedLeves,
 
   resultPath.eachFile(FileType.FILES) { file ->
 
-    String fileContents = workaroundUnclosedProblemXmlTags(file.getText('UTF-8'))
-
-    def xmlDocument = new XmlParser().parseText(fileContents)
-    def fileIssues = []
     def xmlFileName = file.name
+
+    if (file.length() > 2 * 1024 * 1024) {
+      println "--- Skipping $xmlFileName it's to large (> 2MB)"
+      return
+    }
 
     if (skipResults.contains(xmlFileName.replace(".xml", ""))) {
       println "--- Skipping $xmlFileName"
       return
     }
+
+    String fileContents = workaroundUnclosedProblemXmlTags(file.getText('UTF-8'))
+
+    def xmlDocument = new XmlParser().parseText(fileContents)
+    def fileIssues = []
 
     xmlDocument.problem.each { problem ->
       String severity = problem.problem_class.@severity
